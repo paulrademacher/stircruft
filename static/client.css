@@ -1,8 +1,13 @@
 .tile {
-    display: inline-block;
+    xxdisplay: inline-block;
     width: 12%;
-    height: 40px;
+    height: 60px;
     border: 1px solid silver;
+    float: left;
+}
+
+.clear {
+    clear: both;
 }
 
 .p0base {
@@ -11,4 +16,12 @@
 
 .p1base {
     border: 1px solid orange;
+}
+
+.p0color {
+    color: blue;
+}
+
+.p1color {
+    color: orange;
 }

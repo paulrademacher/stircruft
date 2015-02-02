@@ -5,7 +5,7 @@ var MARAUDER = "marauder";
 var COMMAND_CENTER = "cc";
 var BARRACKS = "barracks";
 var BUNKER = "bunker";
-var NUM_SCVS = 5;
+var NUM_SCVS = 6;
 var ACTION_MAKEBUILDING = "makebuilding";
 var ACTION_MAKEUNIT = "makeunit";
 var gPlayerNum = 0;
@@ -14,11 +14,12 @@ function randomId() {
   return ("" + Math.random() + "" + Math.random()).replace(/0./g, "");
 }
 
-function Button(label, mineralCost, gasCost, func) {
+function Button(label, mineralCost, gasCost, supply, func) {
   this.label = label;
   this.func = func;
   this.mineralCost = mineralCost;
   this.gasCost = gasCost;
+  this.supply = supply;
   this.id = randomId();
 }
 
@@ -26,6 +27,7 @@ Button.prototype.to$ = function() {
   var button = $("<button>").text(this.label).click(this.func).attr("id", this.id).
     data("mineralCost", this.mineralCost).
     data("gasCost", this.gasCost).
+    data("supply", this.supply).
     addClass("costButton");
   return button;
 }
@@ -84,15 +86,21 @@ function Unit(type, playerNum, x, y) {
     this.mineralCost = 50;
     this.canCollect = true;
     this.collect(x, y);
+    this.icon = "s";
+    this.supply = 1;
   } else if (this.type == MARINE) {
     this.name = "Marine";
     this.health = 50;
     this.mineralCost = 50;
+    this.icon = "m";
+    this.supply = 1;
   } else if (this.type == MARAUDER) {
     this.name = "Marauder";
     this.health = 125;
     this.mineralCost = 100;
     this.gasCost = 25;
+    this.icon = "M";
+    this.supply = 2;
   }
 }
 
@@ -123,7 +131,7 @@ function Player(playerNum, x, y) {
   this.minerals = 400;  // One cc.
   this.gas = 0;
   this.supplyMax = 11;
-  this.supplyUsed = 5;
+  this.supplyUsed = 6;
   this.units = [];
   this.buildings = [];
 
@@ -160,6 +168,10 @@ function Tile() {
   this.playerState = [new TilePlayerState(), new TilePlayerState()];
 }
 
+Tile.prototype.clearUnits = function() {
+  this.units = [[], []];
+};
+
 function Map(numRows, numCols) {
   this.numRows = numRows;
   this.numCols = numCols;
@@ -194,6 +206,20 @@ Map.prototype.getTile = function(row, col) {
 };
 
 Map.prototype.toString = function() {
+  for (var i = 0; i < gMap.numRows; i++) {
+    for (var j = 0; j < gMap.numCols; j++) {
+      var tile = gMap.getTile(i, j);
+      tile.clearUnits();
+    }
+  }
+
+  for (var i = 0; i < 2; i++) {
+    gPlayers[i].units.forEach(function(unit) {
+      var tile = gMap.getTile(unit.x, unit.y);
+      tile.units[i].push(unit);
+    });
+  }
+
   var out = "";
   for (var i = 0; i < gMap.numRows; i++) {
     for (var j = 0; j < gMap.numCols; j++) {
@@ -205,7 +231,34 @@ Map.prototype.toString = function() {
       if (tile.playerState[1].hasBase) {
         classes += "p1base ";
       }
-      out += "<span class='tile " + classes + "'>" + tile.minerals + "/" + tile.gas  + "</span>";
+      if (j == 0) {
+        classes += "clear ";
+      }
+
+      out += "<div class='tile " + classes + "'>";
+
+      if (tile.minerals > 0 || tile.gas > 0) {
+        out += tile.minerals + "/" + tile.gas;
+      }
+
+      for (var p = 0; p < 2; p++) {
+        if (tile.units[p].length > p) {
+          out += "<div class='p" + p + "color'>";
+
+          var unitCount = {};
+
+          tile.units[p].forEach(function(unit) {
+            unitCount[unit.icon] = unitCount[unit.icon] + 1 || 1;
+          });
+
+          for (var key in unitCount) {
+            out += key + unitCount[key] + " ";
+          }
+          out += "</div>";
+        }
+      }
+
+      out += "</div>";
     }
     out += "<br>";
   }
@@ -250,6 +303,7 @@ function render() {
 
   for (var i = 0; i < NUM_PLAYERS; i++) {
     var unitString = "M:" + gPlayers[i].minerals + " G:" + gPlayers[i].gas + " ";
+    unitString += "Supply: " + gPlayers[i].supplyUsed + "/" + gPlayers[i].supplyMax + " ";
     unitString += "<BR>" + JSON.stringify(gPlayers[i].getUnitTypeCount());
     $("#units" + i).html(unitString);
   }
@@ -260,7 +314,7 @@ function render() {
       $("#buildings").append(building.type);
       gBuildingMetas[building.type].creates.forEach(function(createsType) {
         var meta = new Unit(createsType, 0, 0, 0);
-        var button = new Button(meta.name, meta.mineralCost, meta.gasCost,
+        var button = new Button(meta.name, meta.mineralCost, meta.gasCost, meta.supply,
              function(meta) {
                newAction(ACTION_MAKEUNIT, gPlayerNum, createsType,
                          gCurrPlayer.x, gCurrPlayer.y, -1, -1, -1);
@@ -283,7 +337,8 @@ function render() {
 
   $(".costButton").each(function(index, el) {
     var $el = $(el);
-    if (gCurrPlayer.minerals >= $el.data("mineralCost") && gCurrPlayer.gas >= $el.data("gasCost")) {
+    if (gCurrPlayer.minerals >= $el.data("mineralCost") && gCurrPlayer.gas >= $el.data("gasCost")
+       && gCurrPlayer.supplyUsed + $el.data("supply") <= gCurrPlayer.supplyMax) {
       $el.prop("disabled", false);
     } else {
       $el.prop("disabled", true);
@@ -292,7 +347,7 @@ function render() {
 
 }
 
-var gMap = new Map(10, 8);
+var gMap = new Map(7, 7);
 
 var gBuildingMetas = {};
 gBuildingMetas[COMMAND_CENTER] = new BuildingMeta(COMMAND_CENTER);
@@ -339,6 +394,7 @@ function execAction(action) {
     }
     player.minerals -= unit.mineralCost;
     player.gas -= unit.gasCost;
+    player.supplyUsed += unit.supply;
   }
 }
 
@@ -352,7 +408,7 @@ $(function() {
     var meta = gBuildingMetas[key];
     console.log(meta.type);
 
-    var button = new Button(meta.name, meta.mineralCost, meta.gasCost,
+    var button = new Button(meta.name, meta.mineralCost, meta.gasCost, 0 /* supply */,
           function(meta) {
             newAction(ACTION_MAKEBUILDING, gPlayerNum, meta.type,
                       gCurrPlayer.x, gCurrPlayer.y, -1, -1, -1);
