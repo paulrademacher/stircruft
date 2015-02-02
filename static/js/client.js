@@ -9,6 +9,8 @@ var NUM_SCVS = 6;
 var ACTION_MAKEBUILDING = "makebuilding";
 var ACTION_MAKEUNIT = "makeunit";
 var gPlayerNum = 0;
+var gTime = 0;
+var timeIncrement = 1.2;
 
 function randomId() {
   return ("" + Math.random() + "" + Math.random()).replace(/0./g, "");
@@ -36,21 +38,26 @@ function BuildingMeta(type) {
   this.type = type;
   this.creates = [];
   this.gasCost = 0;
+  this.spawnType = "";
+  this.spawnProgress = 0;
 
   if (type == COMMAND_CENTER) {
     this.name = "Command Center";
     this.health = 1500;
     this.mineralCost = 400;
     this.creates = [SCV];
+    this.buildTime = 100;
   } else if (type == BARRACKS) {
     this.name = "Barracks";
     this.health = 800;
     this.mineralCost = 150;
     this.creates = [MARINE, MARAUDER];
+    this.buildTime = 65;
   } else if (type == BUNKER) {
     this.name = "Bunker";
     this.health = 200;
     this.mineralCost = 100;
+    this.buildTime = 40;
   }
 }
 
@@ -74,6 +81,7 @@ function Unit(type, playerNum, x, y) {
   this.playerNum = playerNum;
   this.x = x;
   this.y = y;
+  this.ready = false;
 
   this.canCollect = false;
   this.movingX = -1;
@@ -88,12 +96,14 @@ function Unit(type, playerNum, x, y) {
     this.collect(x, y);
     this.icon = "s";
     this.supply = 1;
+    this.buildTime = 17;
   } else if (this.type == MARINE) {
     this.name = "Marine";
     this.health = 50;
     this.mineralCost = 50;
     this.icon = "m";
     this.supply = 1;
+    this.buildTime = 25;
   } else if (this.type == MARAUDER) {
     this.name = "Marauder";
     this.health = 125;
@@ -101,6 +111,7 @@ function Unit(type, playerNum, x, y) {
     this.gasCost = 25;
     this.icon = "M";
     this.supply = 2;
+    this.buildTime = 30;
   }
 }
 
@@ -270,6 +281,9 @@ Map.prototype.render = function($el) {
 };
 
 function tick() {
+  gTime += timeIncrement;
+  $("#clock").html(parseInt(gTime));
+
   for (var i = 0; i < NUM_PLAYERS; i++) {
     var player = gPlayers[i];
     var units = player.units;
@@ -330,7 +344,7 @@ function render() {
     $("#units").html("");
     gCurrPlayer.units.forEach(function(unit) {
       $("#units").append(unit.type);
-      $("#units").append("<BR>");
+      $("#units").append(" ");
     });
     gRefreshUnitsRender = false;
   }
