@@ -1,0 +1,14 @@
+.tile {
+    display: inline-block;
+    width: 12%;
+    height: 40px;
+    border: 1px solid silver;
+}
+
+.p0base {
+    border: 1px solid blue;
+}
+
+.p1base {
+    border: 1px solid orange;
+}
