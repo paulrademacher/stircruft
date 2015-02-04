@@ -16,20 +16,34 @@ function randomId() {
   return ("" + Math.random() + "" + Math.random()).replace(/0./g, "");
 }
 
-function Button(label, mineralCost, gasCost, supply, func) {
+function getTime() {
+  return gTime;
+}
+
+function getPercentDone(timeStart, timeEnd) {
+  return Math.round((getTime() - timeStart) / (timeEnd - timeStart) * 100) / 100;
+}
+
+function makePercentDoneString(timeStart, timeEnd) {
+  return "<span class='progresspercent'>" + ("" + getPercentDone(timeStart, timeEnd)).replace("0.", ".") + "</span>";
+}
+
+function Button(label, mineralCost, gasCost, supply, buildingParent, func) {
   this.label = label;
   this.func = func;
   this.mineralCost = mineralCost;
   this.gasCost = gasCost;
   this.supply = supply;
+  this.buildingParent = buildingParent;
   this.id = randomId();
 }
 
 Button.prototype.to$ = function() {
-  var button = $("<button>").text(this.label).click(this.func).attr("id", this.id).
+  var button = $("<button>").text(this.label).mousedown(this.func).attr("id", this.id).
     data("mineralCost", this.mineralCost).
     data("gasCost", this.gasCost).
     data("supply", this.supply).
+    data("buildingParent", this.buildingParent).
     addClass("costButton");
   return button;
 }
@@ -38,8 +52,6 @@ function BuildingMeta(type) {
   this.type = type;
   this.creates = [];
   this.gasCost = 0;
-  this.spawnType = "";
-  this.spawnProgress = 0;
 
   if (type == COMMAND_CENTER) {
     this.name = "Command Center";
@@ -67,14 +79,42 @@ function Building(type, playerNum, x, y) {
   this.x = x;
   this.y = y;
   this.playerNum = playerNum;
+  this.constructionTimeStart = -1;
+  this.constructionTimeEnd = -1;
+  this.spawnTimeStart = -1;
+  this.spawnTimeEnd = -1;
+  this.spawnUnit = undefined;
 
   var buildingMeta = gBuildingMetas[type];
   this.health = buildingMeta.health;
-
-  if (type == BUNKER) {
-    gPlayers[playerNum].supplyMax += 8;
-  }
 }
+
+Building.prototype.checkSpawnStatus = function() {
+  if (this.spawnTimeEnd != -1 &&
+      getTime() >= this.spawnTimeEnd) {
+    gPlayers[this.playerNum].units.push(this.spawnUnit);
+    if (this.playerNum == gPlayerNum) {
+      gRefreshUnitsRender = true;
+    }
+
+    this.spawnTimeStart = -1;
+    this.spawnTimeEnd = -1;
+    this.spawnUnit = undefined;
+  }
+};
+
+Building.prototype.checkBuildStatus = function() {
+  if (this.constructionTimeEnd != -1 && getTime() >= this.constructionTimeEnd) {
+    gRefreshBuildingsRender = true;
+
+    if (this.type == BUNKER) {
+      gPlayers[this.playerNum].supplyMax += 8;
+    }
+
+    this.constructionTimeStart = -1;
+    this.constructionTimeEnd = -1;
+  }
+};
 
 function Unit(type, playerNum, x, y) {
   this.type = type;
@@ -147,7 +187,12 @@ function Player(playerNum, x, y) {
   this.buildings = [];
 
   for (var i = 0; i < NUM_SCVS; i++) {
-    this.units.push(new Unit(SCV, playerNum, x, y));
+    var scv = new Unit(SCV, playerNum, x, y);
+    this.units.push(scv);
+
+    if (i == NUM_SCVS - 1) {
+      scv.collectingWhat = "gas";
+    }
   }
 }
 
@@ -174,7 +219,7 @@ function Tile() {
   this.minerals = 0;
   this.gas = 0;
   this.mineralRate = 1;
-  this.gasRate = 1;
+  this.gasRate = .25;
 
   this.playerState = [new TilePlayerState(), new TilePlayerState()];
 }
@@ -249,7 +294,7 @@ Map.prototype.toString = function() {
       out += "<div class='tile " + classes + "'>";
 
       if (tile.minerals > 0 || tile.gas > 0) {
-        out += tile.minerals + "/" + tile.gas;
+        out += tile.minerals + "/" + Math.round(tile.gas);
       }
 
       for (var p = 0; p < 2; p++) {
@@ -286,6 +331,14 @@ function tick() {
 
   for (var i = 0; i < NUM_PLAYERS; i++) {
     var player = gPlayers[i];
+    player.buildings.forEach(function(building) {
+      building.checkBuildStatus();
+      building.checkSpawnStatus();
+    });
+  }
+
+  for (var i = 0; i < NUM_PLAYERS; i++) {
+    var player = gPlayers[i];
     var units = player.units;
     for (var j = 0; j < units.length; j++) {
       var unit = units[j];
@@ -316,25 +369,42 @@ function render() {
   gMap.render($("#map"));
 
   for (var i = 0; i < NUM_PLAYERS; i++) {
-    var unitString = "M:" + gPlayers[i].minerals + " G:" + gPlayers[i].gas + " ";
+    var unitString = "M:" + gPlayers[i].minerals + 
+      " G:" + parseInt(gPlayers[i].gas) + " ";
     unitString += "Supply: " + gPlayers[i].supplyUsed + "/" + gPlayers[i].supplyMax + " ";
     unitString += "<BR>" + JSON.stringify(gPlayers[i].getUnitTypeCount());
     $("#units" + i).html(unitString);
   }
 
-  if (gRefreshBuildingsRender) {
+  if (gRefreshBuildingsRender || true) {
     $("#buildings").html("");
     gCurrPlayer.buildings.forEach(function(building) {
-      $("#buildings").append(building.type);
+      $("#buildings").append(building.type + " ");
+      var underConstruction = building.constructionTimeEnd != -1;
+      if (underConstruction) {
+        $("#buildings").
+          append(" " + makePercentDoneString(building.constructionTimeStart,
+                                            building.constructionTimeEnd));
+      }
       gBuildingMetas[building.type].creates.forEach(function(createsType) {
         var meta = new Unit(createsType, 0, 0, 0);
-        var button = new Button(meta.name, meta.mineralCost, meta.gasCost, meta.supply,
+        if (!underConstruction) {
+          var button = new Button(meta.icon, meta.mineralCost, meta.gasCost,
+                                  meta.supply, building,
              function(meta) {
-               newAction(ACTION_MAKEUNIT, gPlayerNum, createsType,
-                         gCurrPlayer.x, gCurrPlayer.y, -1, -1, -1);
+               newAction(ACTION_MAKEUNIT, gPlayerNum, building, createsType,
+                         gCurrPlayer.x, gCurrPlayer.y, -1, -1);
              });
-        $("#buildings").append(button.to$());
+          $("#buildings").append(button.to$());
+        }
       });
+
+      if (building.spawnTimeEnd != -1) {
+        var percentString = makePercentDoneString(building.spawnTimeStart,
+                                                  building.spawnTimeEnd);
+        $("#buildings").append(" " + building.spawnUnit.icon + " " + percentString)
+      }
+
       $("#buildings").append("<br>");
     });
     gRefreshBuildingsRender = false;
@@ -351,8 +421,12 @@ function render() {
 
   $(".costButton").each(function(index, el) {
     var $el = $(el);
+    var buildingParent = $el.data("buildingParent");
+
     if (gCurrPlayer.minerals >= $el.data("mineralCost") && gCurrPlayer.gas >= $el.data("gasCost")
-       && gCurrPlayer.supplyUsed + $el.data("supply") <= gCurrPlayer.supplyMax) {
+       && gCurrPlayer.supplyUsed + $el.data("supply") <= gCurrPlayer.supplyMax
+       && (!buildingParent || buildingParent.spawnTimeEnd == -1)
+       ) {
       $el.prop("disabled", false);
     } else {
       $el.prop("disabled", true);
@@ -368,6 +442,7 @@ gBuildingMetas[COMMAND_CENTER] = new BuildingMeta(COMMAND_CENTER);
 gBuildingMetas[BUNKER] = new BuildingMeta(BUNKER);
 gBuildingMetas[BARRACKS] = new BuildingMeta(BARRACKS);
 
+var gBuildingsUnderConstruction = [];
 var gRefreshBuildingsRender = true;  // Will redraw the buildings render.
 var gRefreshUnitsRender = true;  // Will redraw the units render.
 var gBuildButtons = [];
@@ -390,22 +465,31 @@ function execAction(action) {
     var buildingType = action.p1;
     var x = action.p2;
     var y = action.p3;
+    var immediate = action.p4;
     var building = new Building(buildingType, action.playerNum, x, y);
     player.buildings.push(building);
     if (action.playerNum == gPlayerNum) {
       gRefreshBuildingsRender = true;
     }
+
+    if (!immediate) {
+      building.constructionTimeStart = getTime();
+      building.constructionTimeEnd = building.constructionTimeStart +
+        gBuildingMetas[buildingType].buildTime;
+    }
+
     player.minerals -= gBuildingMetas[buildingType].mineralCost;
     player.gas -= gBuildingMetas[buildingType].gasCost;
   } else if (action.type == ACTION_MAKEUNIT) {
-    var unitType = action.p1;
-    var x = action.p2;
-    var y = action.p3;
+    var building = action.p1;
+    var unitType = action.p2;
+    var x = action.p3;
+    var y = action.p4;
     var unit = new Unit(unitType, action.playerNum, x, y);
-    gPlayers[action.playerNum].units.push(unit);
-    if (action.playerNum == gPlayerNum) {
-      gRefreshUnitsRender = true;
-    }
+    building.spawnTimeStart = getTime();
+    building.spawnTimeEnd = building.spawnTimeStart + unit.buildTime;
+    building.spawnUnit = unit;
+
     player.minerals -= unit.mineralCost;
     player.gas -= unit.gasCost;
     player.supplyUsed += unit.supply;
@@ -420,21 +504,23 @@ $(function() {
   $("#build").html("");
   for (var key in gBuildingMetas) {
     var meta = gBuildingMetas[key];
-    console.log(meta.type);
-
-    var button = new Button(meta.name, meta.mineralCost, meta.gasCost, 0 /* supply */,
+    var button = new Button(meta.name, meta.mineralCost, meta.gasCost,
+                            0 /* supply */, null,
           function(meta) {
             newAction(ACTION_MAKEBUILDING, gPlayerNum, meta.type,
-                      gCurrPlayer.x, gCurrPlayer.y, -1, -1, -1);
+                      gCurrPlayer.x, gCurrPlayer.y, false /* not immediate */,
+                      -1, -1);
           }.bind(this, meta));
 
     gBuildButtons.push(button);
     $("#build").append(button.to$());
   }
 
-  newAction(ACTION_MAKEBUILDING, 0, COMMAND_CENTER, gPlayers[0].x, gPlayers[0].y, -1, -1, -1);
-  newAction(ACTION_MAKEBUILDING, 1, COMMAND_CENTER, gPlayers[1].x, gPlayers[1].y, -1, -1, -1);
+  newAction(ACTION_MAKEBUILDING, 0, COMMAND_CENTER, gPlayers[0].x, gPlayers[0].y,
+            true /* immediate */, -1, -1);
+  newAction(ACTION_MAKEBUILDING, 1, COMMAND_CENTER, gPlayers[1].x, gPlayers[1].y,
+            true /* immediate */, -1, -1);
 
   render();
-  setInterval(tick, 250);
+  setInterval(tick, 70);
 });
