@@ -25,7 +25,11 @@ function getPercentDone(timeStart, timeEnd) {
 }
 
 function makePercentDoneString(timeStart, timeEnd) {
-  return "<span class='progresspercent'>" + ("" + getPercentDone(timeStart, timeEnd)).replace("0.", ".") + "</span>";
+  var percentDone = getPercentDone(timeStart, timeEnd);
+  var heightPx = Math.ceil(percentDone * 20) + "px";
+  var topPx = Math.ceil(((1.0 - percentDone) * 20) - 2) + "px";
+//  return "<span class='progresspercent'>" + ("" + percentDone).replace("0.", ".") + "</span>";
+  return "<div class='progressverticalcontainer'><span class='progressverticalbar' style='height: "+ heightPx +";top:"+ topPx +"''>&nbsp;</span></div>";
 }
 
 function Button(label, mineralCost, gasCost, supply, buildingParent, func) {
@@ -79,19 +83,33 @@ function Building(type, playerNum, x, y) {
   this.x = x;
   this.y = y;
   this.playerNum = playerNum;
+
   this.constructionTimeStart = -1;
   this.constructionTimeEnd = -1;
+
   this.spawnTimeStart = -1;
   this.spawnTimeEnd = -1;
-  this.spawnUnit = undefined;
+  this.spawnUnit = null;
+  this.spawnUnitQueue = [];
 
   var buildingMeta = gBuildingMetas[type];
   this.health = buildingMeta.health;
 }
 
+Building.prototype.pullFromSpawnQueue = function() {
+  if (this.spawnUnitQueue.length > 0 && !this.spawnUnit) {
+    var unit = this.spawnUnitQueue.shift();
+    this.spawnTimeStart = getTime();
+    this.spawnTimeEnd = this.spawnTimeStart + unit.buildTime;
+    this.spawnUnit = unit;
+  }
+}
+
 Building.prototype.checkSpawnStatus = function() {
-  if (this.spawnTimeEnd != -1 &&
-      getTime() >= this.spawnTimeEnd) {
+  this.pullFromSpawnQueue();
+
+  if (this.spawnTimeEnd != -1 && getTime() >= this.spawnTimeEnd) {
+
     gPlayers[this.playerNum].units.push(this.spawnUnit);
     if (this.playerNum == gPlayerNum) {
       gRefreshUnitsRender = true;
@@ -99,8 +117,10 @@ Building.prototype.checkSpawnStatus = function() {
 
     this.spawnTimeStart = -1;
     this.spawnTimeEnd = -1;
-    this.spawnUnit = undefined;
+    this.spawnUnit = null;
   }
+
+  this.pullFromSpawnQueue();
 };
 
 Building.prototype.checkBuildStatus = function() {
@@ -369,8 +389,8 @@ function render() {
   gMap.render($("#map"));
 
   for (var i = 0; i < NUM_PLAYERS; i++) {
-    var unitString = "M:" + gPlayers[i].minerals + 
-      " G:" + parseInt(gPlayers[i].gas) + " ";
+    var unitString = "Minerals:" + gPlayers[i].minerals +
+      " Gas:" + parseInt(gPlayers[i].gas) + " ";
     unitString += "Supply: " + gPlayers[i].supplyUsed + "/" + gPlayers[i].supplyMax + " ";
     unitString += "<BR>" + JSON.stringify(gPlayers[i].getUnitTypeCount());
     $("#units" + i).html(unitString);
@@ -402,7 +422,12 @@ function render() {
       if (building.spawnTimeEnd != -1) {
         var percentString = makePercentDoneString(building.spawnTimeStart,
                                                   building.spawnTimeEnd);
-        $("#buildings").append(" " + building.spawnUnit.icon + " " + percentString)
+        var queueString = "";
+        for (var i = 0; i < building.spawnUnitQueue.length; i++) {
+          queueString += building.spawnUnitQueue[i].icon;
+        }
+        $("#buildings").append(" " + percentString + " " +
+                               building.spawnUnit.icon + queueString)
       }
 
       $("#buildings").append("<br>");
@@ -425,7 +450,7 @@ function render() {
 
     if (gCurrPlayer.minerals >= $el.data("mineralCost") && gCurrPlayer.gas >= $el.data("gasCost")
        && gCurrPlayer.supplyUsed + $el.data("supply") <= gCurrPlayer.supplyMax
-       && (!buildingParent || buildingParent.spawnTimeEnd == -1)
+        //&& (!buildingParent || buildingParent.spawnTimeEnd == -1)
        ) {
       $el.prop("disabled", false);
     } else {
@@ -486,9 +511,8 @@ function execAction(action) {
     var x = action.p3;
     var y = action.p4;
     var unit = new Unit(unitType, action.playerNum, x, y);
-    building.spawnTimeStart = getTime();
-    building.spawnTimeEnd = building.spawnTimeStart + unit.buildTime;
-    building.spawnUnit = unit;
+
+    building.spawnUnitQueue.push(unit);
 
     player.minerals -= unit.mineralCost;
     player.gas -= unit.gasCost;

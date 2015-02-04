@@ -34,3 +34,18 @@ body {
     font-family: courier;
     font-weight: 200;
 }
+
+.progressverticalbar {
+    background: silver;
+    display: inline-block;
+    position: relative;
+    width: 100%;
+}
+
+.progressverticalcontainer {
+    position: relative;
+    display: inline-block;
+    width: 12px;
+    height: 20px;
+    border: 1px solid silver;
+}
