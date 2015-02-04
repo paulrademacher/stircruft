@@ -8,6 +8,7 @@ var BUNKER = "bunker";
 var NUM_SCVS = 6;
 var ACTION_MAKEBUILDING = "makebuilding";
 var ACTION_MAKEUNIT = "makeunit";
+var MAX_BUILD_QUEUE = 5;
 var gPlayerNum = 0;
 var gTime = 0;
 var timeIncrement = 1.2;
@@ -450,7 +451,7 @@ function render() {
 
     if (gCurrPlayer.minerals >= $el.data("mineralCost") && gCurrPlayer.gas >= $el.data("gasCost")
        && gCurrPlayer.supplyUsed + $el.data("supply") <= gCurrPlayer.supplyMax
-        //&& (!buildingParent || buildingParent.spawnTimeEnd == -1)
+        && (!buildingParent || buildingParent.spawnUnitQueue.length < 5)
        ) {
       $el.prop("disabled", false);
     } else {
