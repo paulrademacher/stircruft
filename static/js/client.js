@@ -8,10 +8,25 @@ var BUNKER = "bunker";
 var NUM_SCVS = 6;
 var ACTION_MAKEBUILDING = "makebuilding";
 var ACTION_MAKEUNIT = "makeunit";
+var ACTION_SELECT = "select";
+var ACTION_SELECT_ALL_ARMY = "selectallarmy";
+var ACTION_UNSELECT_ALL = "unselectall";
+var ACTION_ATTACK = "attack";
+var ACTION_MOVE = "move";
+var ACTION_ATTACKMOVE = "attackmove";
+var ACTION_HOLD = "hold";
+var ACTION_STOP = "stop";
+var ACTION_ATTACK_MAIN_BASE = "attackmainbase";
 var MAX_BUILD_QUEUE = 5;
 var gPlayerNum = 0;
 var gTime = 0;
 var timeIncrement = 1.2;
+var GOAL_MOVE = "move";
+var GOAL_ATTACK = "attack";
+var GOAL_ATTACKMOVE = "attackmove";
+var GOAL_HOLD = "hold";
+var GOAL_STOP = "stop";
+
 
 function randomId() {
   return ("" + Math.random() + "" + Math.random()).replace(/0./g, "");
@@ -31,6 +46,58 @@ function makePercentDoneString(timeStart, timeEnd) {
   var topPx = Math.ceil(((1.0 - percentDone) * 20) - 2) + "px";
 //  return "<span class='progresspercent'>" + ("" + percentDone).replace("0.", ".") + "</span>";
   return "<div class='progressverticalcontainer'><span class='progressverticalbar' style='height: "+ heightPx +";top:"+ topPx +"''>&nbsp;</span></div>";
+}
+
+function Segment(x0, y0, x1, y1) {
+  this.x0 = x0;
+  this.y0 = y0;
+  this.x1 = x1;
+  this.y1 = y1;
+
+  this.diffX = x1 - x0;
+  this.diffY = y1 - y0;
+  this.length = Math.sqrt(this.diffX*this.diffX + this.diffY*this.diffY);
+
+  if (this.length != 0) {
+    this.unitVecX = this.diffX / this.length;
+    this.unitVecY = this.diffY / this.length;
+  }
+}
+
+Segment.prototype.advance = function(x, y, distance) {
+  return {"x": x + this.unitVecX * distance,
+          "y": y + this.unitVecY * distance};
+}
+
+function Path() {
+  this.segments = [];
+  this.currentSegmentIndex = 0;
+  this.distanceTravelled = 0;
+  this.x = 0;
+  this.y = 0;
+}
+
+Path.prototype.addSegment = function(x0, y0, x1, y1) {
+  this.segments.push(new Segment(x0, y0, x1, y1));
+
+  if (this.segments.length == 1) {
+    // First segment added.
+    this.x = x0;
+    this.y = y0;
+  }
+}
+
+Path.prototype.advance = function(x, y, distance) {
+  var result = this.segments[0].advance(x, y, distance);
+  this.distanceTravelled += distance;
+  if (this.distanceTravelled >= this.segments[0].length) {
+    result.done = true;
+    result.x = this.segments[0].x1;
+    result.y = this.segments[0].y1;
+  } else {
+    result.done = false;
+  }
+  return result;
 }
 
 function Button(label, mineralCost, gasCost, supply, buildingParent, func) {
@@ -59,7 +126,7 @@ function BuildingMeta(type) {
   this.gasCost = 0;
 
   if (type == COMMAND_CENTER) {
-    this.name = "Command Center";
+    this.name = "Cmd Center";
     this.health = 1500;
     this.mineralCost = 400;
     this.creates = [SCV];
@@ -142,11 +209,12 @@ function Unit(type, playerNum, x, y) {
   this.playerNum = playerNum;
   this.x = x;
   this.y = y;
+  this.xFloat = x;
+  this.yFloat = y;
   this.ready = false;
 
   this.canCollect = false;
-  this.movingX = -1;
-  this.movingY = -1;
+  this.path = null;
   this.gasCost = 0;
 
   if (this.type == SCV) {
@@ -158,6 +226,7 @@ function Unit(type, playerNum, x, y) {
     this.icon = "s";
     this.supply = 1;
     this.buildTime = 17;
+    this.speed = 2.8125;
   } else if (this.type == MARINE) {
     this.name = "Marine";
     this.health = 50;
@@ -165,6 +234,7 @@ function Unit(type, playerNum, x, y) {
     this.icon = "m";
     this.supply = 1;
     this.buildTime = 25;
+    this.speed = 2.25;
   } else if (this.type == MARAUDER) {
     this.name = "Marauder";
     this.health = 125;
@@ -173,6 +243,7 @@ function Unit(type, playerNum, x, y) {
     this.icon = "M";
     this.supply = 2;
     this.buildTime = 30;
+    this.speed = 2.25;
   }
 }
 
@@ -337,7 +408,6 @@ Map.prototype.toString = function() {
 
       out += "</div>";
     }
-    out += "<br>";
   }
   return out;
 };
@@ -395,6 +465,22 @@ function render() {
     unitString += "Supply: " + gPlayers[i].supplyUsed + "/" + gPlayers[i].supplyMax + " ";
     unitString += "<BR>" + JSON.stringify(gPlayers[i].getUnitTypeCount());
     $("#units" + i).html(unitString);
+  }
+
+  // Advance moving units.
+  for (var i = 0; i < NUM_PLAYERS; i++) {
+    gPlayers[i].units.forEach(function(unit) {
+      if (unit.path) {
+        var advance = unit.path.advance(unit.xFloat, unit.yFloat, unit.speed * .1);
+        unit.xFloat = advance.x;
+        unit.yFloat = advance.y;
+        unit.x = Math.floor(unit.xFloat);
+        unit.y = Math.floor(unit.yFloat);
+        if (advance.done) {
+          unit.path = null;
+        }
+      }
+    });
   }
 
   if (gRefreshBuildingsRender || true) {
@@ -472,6 +558,7 @@ var gBuildingsUnderConstruction = [];
 var gRefreshBuildingsRender = true;  // Will redraw the buildings render.
 var gRefreshUnitsRender = true;  // Will redraw the units render.
 var gBuildButtons = [];
+var gSelection = [];
 
 function Action(type, playerNum, p1, p2, p3, p4, p5, p6) {
   this.type = type;
@@ -518,6 +605,34 @@ function execAction(action) {
     player.minerals -= unit.mineralCost;
     player.gas -= unit.gasCost;
     player.supplyUsed += unit.supply;
+  } else if (action.type == ACTION_SELECT_ALL_ARMY) {
+    gSelection = [];
+    gCurrPlayer.units.forEach(function(unit) {
+      if (unit.type != SCV) {
+        gSelection.push(unit);
+      }
+    });
+  } else if (action.type == ACTION_UNSELECT_ALL) {
+    gSelection = [];
+  } else if (action.type == ACTION_SELECT) {
+    var unit = action.p1;
+    gSelection = [unit];
+  } else if (action.type == ACTION_ATTACK_MAIN_BASE) {
+    console.log("attack main base selection:", gSelection);
+
+    gSelection.forEach(function(unit) {
+      var targetX = gPlayers[1-gPlayerNum].x;
+      var targetY = gPlayers[1-gPlayerNum].x;
+
+      var path = new Path();
+      path.addSegment(unit.xFloat, unit.yFloat, targetX, targetY);
+      unit.path = path;
+    });
+  } else if (action.type == ACTION_ATTACK) {
+  } else if (action.type == ACTION_MOVE) {
+  } else if (action.type == ACTION_ATTACKMOVE) {
+  } else if (action.type == ACTION_STOP) {
+  } else if (action.type == ACTION_HOLD) {
   }
 }
 
@@ -540,6 +655,15 @@ $(function() {
     gBuildButtons.push(button);
     $("#build").append(button.to$());
   }
+
+  var button = new Button("Attack main base",
+                          0 /* mineralCost */, 0 /* gasCost */,
+                          0 /* supply */, null,
+          function(meta) {
+            newAction(ACTION_SELECT_ALL_ARMY, gPlayerNum, 0, 0, 0, null, -1, -1);
+            newAction(ACTION_ATTACK_MAIN_BASE, gPlayerNum, 0, 0, 0, null, -1, -1); // TODO: coords
+          }.bind(this, meta));
+  $("#tactics").append(button.to$());
 
   newAction(ACTION_MAKEBUILDING, 0, COMMAND_CENTER, gPlayers[0].x, gPlayers[0].y,
             true /* immediate */, -1, -1);
