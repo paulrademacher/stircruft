@@ -2,13 +2,48 @@ body {
     font-family: arial;
 }
 
+#sprite_anchor {
+    position: absolute;
+}
+
+#map {
+    font-size: 10pt;
+}
+
 .tile {
     xxdisplay: inline-block;
-    width: 12%;
-    height: 60px;
-    border: 1px solid silver;
+
+    width: 80px;
+    height: 46px;
+
+    xbox-sizing:border-box;
+    x-moz-box-sizing: border-box;
+    x-webkit-box-sizing: border-box;
+
+    border: 0px solid silver;
     float: left;
 }
+
+.lighttile {
+    background: white;
+}
+
+.darktile {
+    background: #f2f2f2;
+}
+
+.lighttilefog {
+    background: #767676;
+}
+
+.darktilefog {
+    background: #707070;
+}
+
+.toptile {border-top: 1px solid silver;}
+.righttile {border-right: 1px solid silver;}
+.lefttile {border-left: 1px solid silver;}
+.bottomtile {border-bottom: 1px solid silver;}
 
 .clear {
     clear: both;
@@ -48,4 +83,8 @@ body {
     width: 12px;
     height: 20px;
     border: 1px solid silver;
+}
+
+div.sprite {
+    position: absolute;
 }

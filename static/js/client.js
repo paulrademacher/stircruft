@@ -1,4 +1,8 @@
 var NUM_PLAYERS = 2;
+var NUM_ROWS = 9;
+var NUM_COLS = 11;
+var TILE_WIDTH = 80;
+var TILE_HEIGHT = 46;
 var SCV = "scv";
 var MARINE = "marine";
 var MARAUDER = "marauder";
@@ -18,9 +22,12 @@ var ACTION_HOLD = "hold";
 var ACTION_STOP = "stop";
 var ACTION_ATTACK_MAIN_BASE = "attackmainbase";
 var MAX_BUILD_QUEUE = 5;
+
+var gSmoothIcons = false;
+var gDrawSegments = false;
 var gPlayerNum = 0;
 var gTime = 0;
-var timeIncrement = 1.2;
+var timeIncrement = 3.7;
 var GOAL_MOVE = "move";
 var GOAL_ATTACK = "attack";
 var GOAL_ATTACKMOVE = "attackmove";
@@ -69,16 +76,34 @@ Segment.prototype.advance = function(x, y, distance) {
           "y": y + this.unitVecY * distance};
 }
 
+Segment.prototype.pointByDistance = function(distance) {
+  return {"x": this.x0 + this.unitVecX * distance,
+          "y": this.y0 + this.unitVecY * distance};
+}
+
 function Path() {
   this.segments = [];
-  this.currentSegmentIndex = 0;
   this.distanceTravelled = 0;
+  this.previousSegmentIndex = -1;
   this.x = 0;
   this.y = 0;
+  this.totalLength = 0;
+}
+
+Path.prototype.addWaypoint = function(x, y) {
+  if (this.segments.length == 0) {
+    console.log("ERROR: Adding waypoint to empty path");
+    return;
+  }
+  var lastSegment = this.segments[this.segments.length - 1];
+  this.addSegment(lastSegment.x1, lastSegment.y1, x, y);
 }
 
 Path.prototype.addSegment = function(x0, y0, x1, y1) {
-  this.segments.push(new Segment(x0, y0, x1, y1));
+  var segment = new Segment(x0, y0, x1, y1);
+  this.segments.push(segment);
+
+  this.totalLength += segment.length;
 
   if (this.segments.length == 1) {
     // First segment added.
@@ -87,17 +112,51 @@ Path.prototype.addSegment = function(x0, y0, x1, y1) {
   }
 }
 
-Path.prototype.advance = function(x, y, distance) {
-  var result = this.segments[0].advance(x, y, distance);
+Path.prototype.advance = function(distance) {
   this.distanceTravelled += distance;
-  if (this.distanceTravelled >= this.segments[0].length) {
-    result.done = true;
-    result.x = this.segments[0].x1;
-    result.y = this.segments[0].y1;
-  } else {
-    result.done = false;
+  var result = this.pointByDistance(this.distanceTravelled);
+
+  if (result.segmentIndex != this.previousSegmentIndex) {
+    /* Clamp first point to segment origin whenever we cross segments.
+       Then we don't skip corners.
+     */
+    result.x = this.segments[result.segmentIndex].x0;
+    result.y = this.segments[result.segmentIndex].y0;
+    console.log("JUMP");
+    console.log(result.x, result.y);
+
+
   }
+  this.previousSegmentIndex = result.segmentIndex;
   return result;
+}
+
+Path.prototype.pointByDistance = function(distance) {
+  // Get segment number.
+  var totalSoFar = 0;
+  for (var i = 0; i < this.segments.length; i++) {
+    if (distance < totalSoFar + this.segments[i].length) {
+      break;
+    }
+    totalSoFar += this.segments[i].length;
+  }
+  console.log("SEGMENT:", i);
+
+  if (i == this.segments.length) {
+    // Distance is past end of path.
+    var lastSegment = this.segments[this.segments.length - 1];
+    return {"x": lastSegment.x1,
+            "y": lastSegment.y1,
+            "segmentIndex": this.segments.length - 1,
+            "done": true};
+  }
+
+  var distanceOnSegment = distance - totalSoFar;
+  var point = this.segments[i].pointByDistance(distanceOnSegment);
+  return {"x": point.x,
+          "y": point.y,
+          "segmentIndex": i,
+          "done": false};
 }
 
 function Button(label, mineralCost, gasCost, supply, buildingParent, func) {
@@ -206,7 +265,7 @@ Building.prototype.checkBuildStatus = function() {
 
 function Unit(type, playerNum, x, y) {
   this.type = type;
-  this.playerNum = playerNum;
+  this.playerNum = playerNum;  // Will be zero for meta-units.
   this.x = x;
   this.y = y;
   this.xFloat = x;
@@ -245,6 +304,20 @@ function Unit(type, playerNum, x, y) {
     this.buildTime = 30;
     this.speed = 2.25;
   }
+
+  if (this.playerNum != -1) {  // Ignore meta units.
+    this.sprite = $("<div>").addClass("sprite").html("<img>" + this.icon + "<span class='count'></span>");
+    $("#sprite_anchor").append(this.sprite);
+    this.sprite.hide();
+  }
+}
+
+Unit.prototype.show = function() {
+  this.sprite.show();
+}
+
+Unit.prototype.hide = function() {
+  this.sprite.hide();
 }
 
 Unit.prototype.collect = function() {
@@ -314,15 +387,17 @@ function Tile() {
   this.gasRate = .25;
 
   this.playerState = [new TilePlayerState(), new TilePlayerState()];
+  this.fogged = false;
+  this.unfoggedByNeighbor = false;
 }
 
 Tile.prototype.clearUnits = function() {
   this.units = [[], []];
 };
 
-function Map(numRows, numCols) {
-  this.numRows = numRows;
+function Map(numCols, numRows) {
   this.numCols = numCols;
+  this.numRows = numRows;
   this.rows = [];
 
   for (var i = 0; i < numRows; i++) {
@@ -335,7 +410,7 @@ function Map(numRows, numCols) {
   }
 
   var p0BaseTile = this.getTile(0, 0);
-  var p1BaseTile = this.getTile(numRows - 1, numCols - 1);
+  var p1BaseTile = this.getTile(numCols - 1, numRows - 1);
   p0BaseTile.minerals = 1500;
   p0BaseTile.gas = 800
   p0BaseTile.playerState[0].hasBase = true;
@@ -345,18 +420,23 @@ function Map(numRows, numCols) {
   p1BaseTile.playerState[1].hasBase = true;
 
   gPlayers.push(new Player(0, 0, 0));
-  gPlayers.push(new Player(1, numRows - 1, numCols - 1));
+  gPlayers.push(new Player(1, numCols - 1, numRows - 1));
   gCurrPlayer = gPlayers[gPlayerNum];
 }
 
-Map.prototype.getTile = function(row, col) {
-  return this.rows[row][col];
+Map.prototype.getTile = function(col, row) {
+  try {
+    return this.rows[row][col];
+  } catch (e) {
+    return null;
+    //console.log(e, col, row, "rows.length=" + this.rows.length);
+  }
 };
 
 Map.prototype.toString = function() {
   for (var i = 0; i < gMap.numRows; i++) {
     for (var j = 0; j < gMap.numCols; j++) {
-      var tile = gMap.getTile(i, j);
+      var tile = gMap.getTile(j, i);
       tile.clearUnits();
     }
   }
@@ -368,10 +448,56 @@ Map.prototype.toString = function() {
     });
   }
 
+  // First pass fogging.
+  for (var row = 0; row < gMap.numRows; row++) {
+    for (var col = 0; col < gMap.numCols; col++) {
+      var tile = gMap.getTile(col, row);
+      tile.unfoggedByNeighbor = false;
+      if (tile.units[0].length > 0) {
+        tile.fogged = false;
+      } else {
+        tile.fogged = true;
+      }
+    }
+  }
+
+  // Neighbor pass fogging.
+  for (var row = 0; row < gMap.numRows; row++) {
+    for (var col = 0; col < gMap.numCols; col++) {
+      var tile00 = gMap.getTile(col-1, row-1);
+      var tile10 = gMap.getTile(col,   row-1);
+      var tile20 = gMap.getTile(col+1, row-1);
+      var tile01 = gMap.getTile(col-1, row);
+      var tile =   gMap.getTile(col,   row);
+      var tile21 = gMap.getTile(col+1, row);
+      var tile02 = gMap.getTile(col-1, row+1);
+      var tile12 = gMap.getTile(col,   row+1);
+      var tile22 = gMap.getTile(col+1, row+1);
+      if (!tile.fogged) {
+        if (tile00) { tile00.unfoggedByNeighbor = true; }
+        if (tile10) { tile10.unfoggedByNeighbor = true; }
+        if (tile20) { tile20.unfoggedByNeighbor = true; }
+        if (tile01) { tile01.unfoggedByNeighbor = true; }
+        if (tile21) { tile21.unfoggedByNeighbor = true; }
+        if (tile02) { tile02.unfoggedByNeighbor = true; }
+        if (tile12) { tile12.unfoggedByNeighbor = true; }
+        if (tile22) { tile22.unfoggedByNeighbor = true; }
+      }
+    }
+  }
+  for (var row = 0; row < gMap.numRows; row++) {
+    for (var col = 0; col < gMap.numCols; col++) {
+      var tile = gMap.getTile(col, row);
+      if (tile.unfoggedByNeighbor) {
+        tile.fogged = false;
+      }
+    }
+  }
+
   var out = "";
-  for (var i = 0; i < gMap.numRows; i++) {
-    for (var j = 0; j < gMap.numCols; j++) {
-      var tile = gMap.getTile(i, j);
+  for (var row = 0; row < gMap.numRows; row++) {
+    for (var col = 0; col < gMap.numCols; col++) {
+      var tile = gMap.getTile(col, row);
       var classes = "";
       if (tile.playerState[0].hasBase) {
         classes += "p0base ";
@@ -379,11 +505,30 @@ Map.prototype.toString = function() {
       if (tile.playerState[1].hasBase) {
         classes += "p1base ";
       }
-      if (j == 0) {
+      if (col == 0) {
         classes += "clear ";
       }
 
-      out += "<div class='tile " + classes + "'>";
+      if ((col + row) % 2 == 0) {
+        classes += tile.fogged ? "lighttilefog " : "lighttile ";
+      } else {
+        classes += tile.fogged ? "darktilefog " : "darktile ";
+      }
+
+      if (col == 0) {
+        classes += "lefttile ";
+      }
+      if (col == gMap.numCols - 1) {
+        classes += "righttile ";
+      }
+      if (row == 0) {
+        classes += "toptile ";
+      }
+      if (row == gMap.numRows - 1) {
+        classes += "bottomtile ";
+      }
+
+      out += "<div id='tile" + col + "_" + row + "' class='tile " + classes + "'>";
 
       if (tile.minerals > 0 || tile.gas > 0) {
         out += tile.minerals + "/" + Math.round(tile.gas);
@@ -468,17 +613,46 @@ function render() {
   }
 
   // Advance moving units.
+  var map = $("#map");
+
+  gCanvas.clear();
+  var segmentsDrawn = {};
   for (var i = 0; i < NUM_PLAYERS; i++) {
     gPlayers[i].units.forEach(function(unit) {
       if (unit.path) {
-        var advance = unit.path.advance(unit.xFloat, unit.yFloat, unit.speed * .1);
+        var advance = unit.path.advance(unit.speed * .1);
         unit.xFloat = advance.x;
         unit.yFloat = advance.y;
         unit.x = Math.floor(unit.xFloat);
         unit.y = Math.floor(unit.yFloat);
+        var left = Math.round(unit.xFloat * TILE_WIDTH) + "px";
+        var top = Math.round(unit.yFloat * TILE_HEIGHT) + "px";
+
+        if (gSmoothIcons) {
+          unit.sprite.css("left", left);
+          unit.sprite.css("top", top);
+          unit.sprite.show();
+        }
+
+        if (gDrawSegments) {
+          unit.path.segments.forEach(function(seg) {
+            var segmentString = "" + seg.x0 + ":" + seg.y0 + ":" + seg.x1 + ":" + seg.y1;
+            if (!(segmentString in segmentsDrawn)) {
+              segmentsDrawn[segmentString] = 1;
+              gCanvas.path(["M", seg.x0 * TILE_WIDTH + TILE_WIDTH/2,
+                            seg.y0 * TILE_HEIGHT + TILE_HEIGHT/2,
+                            "L", seg.x1 * TILE_WIDTH + TILE_WIDTH/2,
+                            seg.y1 * TILE_HEIGHT + TILE_HEIGHT/2]).
+                attr({"stroke-opacity": 0.25});
+            }
+          });
+        }
+
         if (advance.done) {
           unit.path = null;
         }
+      } else {
+        unit.sprite.hide();
       }
     });
   }
@@ -494,7 +668,7 @@ function render() {
                                             building.constructionTimeEnd));
       }
       gBuildingMetas[building.type].creates.forEach(function(createsType) {
-        var meta = new Unit(createsType, 0, 0, 0);
+        var meta = new Unit(createsType, -1, 0, 0);
         if (!underConstruction) {
           var button = new Button(meta.icon, meta.mineralCost, meta.gasCost,
                                   meta.supply, building,
@@ -547,7 +721,7 @@ function render() {
 
 }
 
-var gMap = new Map(7, 7);
+var gMap = new Map(NUM_COLS, NUM_ROWS);
 
 var gBuildingMetas = {};
 gBuildingMetas[COMMAND_CENTER] = new BuildingMeta(COMMAND_CENTER);
@@ -559,6 +733,8 @@ var gRefreshBuildingsRender = true;  // Will redraw the buildings render.
 var gRefreshUnitsRender = true;  // Will redraw the units render.
 var gBuildButtons = [];
 var gSelection = [];
+var gCanvas = null;
+
 
 function Action(type, playerNum, p1, p2, p3, p4, p5, p6) {
   this.type = type;
@@ -622,10 +798,11 @@ function execAction(action) {
 
     gSelection.forEach(function(unit) {
       var targetX = gPlayers[1-gPlayerNum].x;
-      var targetY = gPlayers[1-gPlayerNum].x;
+      var targetY = gPlayers[1-gPlayerNum].y;
 
       var path = new Path();
       path.addSegment(unit.xFloat, unit.yFloat, targetX, targetY);
+//      path.addWaypoint(targetX, targetY);
       unit.path = path;
     });
   } else if (action.type == ACTION_ATTACK) {
@@ -641,6 +818,8 @@ function newAction(type, playerNum, p1, p2, p3, p4, p5, p6) {
 }
 
 $(function() {
+  gCanvas = Raphael(0, 0, NUM_COLS * TILE_WIDTH, NUM_ROWS * TILE_HEIGHT);
+
   $("#build").html("");
   for (var key in gBuildingMetas) {
     var meta = gBuildingMetas[key];
